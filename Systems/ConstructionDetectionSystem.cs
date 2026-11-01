@@ -1210,7 +1210,11 @@ namespace ConstructionAnimation.Systems
                     ComponentType.ReadOnly<UnderConstruction>(),
                     ComponentType.ReadOnly<Building>(),
                     ComponentType.ReadOnly<PrefabRef>(),
-                    ComponentType.ReadOnly<Game.Objects.Transform>()
+                    ComponentType.ReadOnly<Game.Objects.Transform>(),
+                    // Same exclusions as the game's own BuildingConstructionSystem query.
+                    ComponentType.Exclude<Destroyed>(),
+                    ComponentType.Exclude<Deleted>(),
+                    ComponentType.Exclude<Game.Tools.Temp>()
                 );
 
             m_CompanyRenterQuery =
