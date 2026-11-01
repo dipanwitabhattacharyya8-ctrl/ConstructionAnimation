@@ -6034,6 +6034,15 @@ namespace ConstructionAnimation.Systems
                 now +
                 DiagnosticHeartbeatInterval;
 
+            // The heartbeat is a Diagnostic line (Full only): below Full skip
+            // the scan of all visuals and the context string.
+            if (
+                !ModLog.FullEnabled
+            )
+            {
+                return;
+            }
+
             int scaffoldRoots =
                 0;
 
@@ -14898,6 +14907,14 @@ namespace ConstructionAnimation.Systems
                     ? float.MaxValue
                     : now +
                       SourceBuildingColorRetrySeconds;
+
+            // Last statement of the method: below Full skip building the line.
+            if (
+                !ModLog.FullEnabled
+            )
+            {
+                return;
+            }
 
             ModLog.Checkpoint(
                 "FACADE-COLOR retry; source=" +
@@ -27336,6 +27353,7 @@ namespace ConstructionAnimation.Systems
             }
 
             if (
+                ModLog.FullEnabled &&
                 visual.WindowCutoffMeshes.Count > 0 &&
                 Mathf.Abs(
                     windowCutHeight -
@@ -27378,13 +27396,18 @@ namespace ConstructionAnimation.Systems
             visual.ForceCutoffResync =
                 false;
 
+            // Only used for the CUTOFF-UPDATE line below (vertex counts are
+            // gathered just to be logged): skip it all below Full.
             if (
-                visual.LastCutoffLoggedProgress < 0f ||
-                Mathf.Abs(
-                    progress -
-                    visual.LastCutoffLoggedProgress
-                ) >= 0.10f ||
-                endpoint
+                ModLog.FullEnabled &&
+                (
+                    visual.LastCutoffLoggedProgress < 0f ||
+                    Mathf.Abs(
+                        progress -
+                        visual.LastCutoffLoggedProgress
+                    ) >= 0.10f ||
+                    endpoint
+                )
             )
             {
                 int runtimeVertexCount =
@@ -32553,6 +32576,14 @@ namespace ConstructionAnimation.Systems
             visual.CraneNextPointOfInterestFrame =
                 simulationFrame +
                 interval;
+
+            // Last statement of the method: below Full skip building the line.
+            if (
+                !ModLog.FullEnabled
+            )
+            {
+                return;
+            }
 
             ModLog.Checkpoint(
                 "CRANE POI target; building=" +
@@ -39120,6 +39151,17 @@ namespace ConstructionAnimation.Systems
 
             byte progress =
                 construction.m_Progress;
+
+            // Below Full this line would be dropped: skip building it.
+            if (
+                !ModLog.FullEnabled
+            )
+            {
+                visual.LastProgress =
+                    progress;
+
+                return;
+            }
 
             if (
                 progress ==

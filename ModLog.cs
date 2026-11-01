@@ -38,6 +38,14 @@ namespace ConstructionAnimation
                 : ModLogLevel.Off;
 
         /// <summary>
+        /// True only at Full. Info/Diagnostic/Checkpoint lines other than
+        /// [PERF] are dropped below Full, so on a hot path check this before
+        /// building the message string (errors and [PERF] are not affected).
+        /// </summary>
+        internal static bool FullEnabled =>
+            Level == ModLogLevel.Full;
+
+        /// <summary>
         /// Called when the option changes. Off closes the diagnostic file;
         /// it is reopened lazily by the next write when the level is raised.
         /// </summary>
