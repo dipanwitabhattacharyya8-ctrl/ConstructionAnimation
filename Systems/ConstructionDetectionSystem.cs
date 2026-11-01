@@ -276,6 +276,7 @@ namespace ConstructionAnimation.Systems
         private long m_PerfCullingCraneUpdatesSkipped;
         private long m_PerfCullingFarThrottledUpdates;
         private long m_PerfCullingNearThrottledUpdates;
+        private long m_PerfCullingUnchangedSkippedUpdates;
 
 
         private readonly HashSet<int> m_LoggedBuildingRenderPrefabs =
@@ -735,6 +736,11 @@ namespace ConstructionAnimation.Systems
             public int CutoffFloorLevelsSourceCount;
             public float CutoffFloorLevelsHeight;
 
+            // "Skip unchanged sites" option: what the last heavy update saw.
+            public bool HeavySignatureValid;
+            public int HeavySignature;
+            public float NextHeavyHeartbeatTime;
+
             public Entity CompanyEntity =
                 Entity.Null;
 
@@ -1184,6 +1190,13 @@ namespace ConstructionAnimation.Systems
         // (previously every frame): ~10 Hz.
         private const float NearVisualUpdateInterval =
             0.10f;
+
+        // "Skip unchanged sites" option: even when nothing in the change
+        // signature moved, run the heavy update at least this often so
+        // anything the signature does not cover (e.g. a crane appearing) is
+        // still picked up.
+        private const float ChangeDrivenHeartbeatInterval =
+            1.0f;
 
         private const float ScaffoldShadowCullDistance =
             650f;
@@ -5272,6 +5285,12 @@ namespace ConstructionAnimation.Systems
                         ? "on"
                         : "off"
                 ) +
+                " changeDriven=" +
+                (
+                    Setting.ChangeDrivenUpdatesEnabled
+                        ? "on"
+                        : "off"
+                ) +
                 "\n  TOTAL OnUpdate " +
                 PerfFormat(
                     m_PerfOnUpdateTicks,
@@ -5416,6 +5435,8 @@ namespace ConstructionAnimation.Systems
                 m_PerfCullingFarThrottledUpdates +
                 " nearThrottled=" +
                 m_PerfCullingNearThrottledUpdates +
+                " unchangedSkipped=" +
+                m_PerfCullingUnchangedSkippedUpdates +
                 " cameraDistance(min/avg/max)=" +
                 (
                     cameraDistanceSamples > 0
@@ -5536,6 +5557,7 @@ namespace ConstructionAnimation.Systems
             m_PerfCullingCraneUpdatesSkipped = 0;
             m_PerfCullingFarThrottledUpdates = 0;
             m_PerfCullingNearThrottledUpdates = 0;
+            m_PerfCullingUnchangedSkippedUpdates = 0;
         }
 
         protected override void OnUpdate()
@@ -13612,6 +13634,11 @@ namespace ConstructionAnimation.Systems
                 visual.VisualDistanceCulled
             )
             {
+                // Hidden: whatever the last heavy update saw is stale, so the
+                // first update after the site is visible again must run.
+                visual.HeavySignatureValid =
+                    false;
+
                 return false;
             }
 
@@ -13655,8 +13682,54 @@ namespace ConstructionAnimation.Systems
                     nearNow +
                     NearVisualUpdateInterval;
 
+                // "Skip unchanged sites": at each 10 Hz tick
+                // run the heavy update only when the cut step, visibility
+                // or LOD changed (or the heartbeat is due).
+                if (
+                    Setting.ChangeDrivenUpdatesEnabled
+                )
+                {
+                    int signature =
+                        GetHeavyUpdateSignature(
+                            visual
+                        );
+
+                    if (
+                        visual.HeavySignatureValid &&
+                        signature ==
+                        visual.HeavySignature &&
+                        nearNow <
+                        visual.NextHeavyHeartbeatTime &&
+                        !CutoffRebuildDue(
+                            visual
+                        )
+                    )
+                    {
+                        m_PerfCullingUnchangedSkippedUpdates++;
+
+                        return false;
+                    }
+
+                    visual.HeavySignature =
+                        signature;
+
+                    visual.HeavySignatureValid =
+                        true;
+
+                    visual.NextHeavyHeartbeatTime =
+                        nearNow +
+                        ChangeDrivenHeartbeatInterval;
+                }
+
                 return true;
             }
+
+            // Beyond the near range the far updates below change what the
+            // site shows (e.g. scaffold shadows off), so the signature from
+            // the last near update no longer describes it: the first near
+            // tick after coming back must run.
+            visual.HeavySignatureValid =
+                false;
 
             float now =
                 global::UnityEngine.Time.unscaledTime;
@@ -13682,6 +13755,84 @@ namespace ConstructionAnimation.Systems
                 interval;
 
             return true;
+        }
+
+        /// <summary>
+        /// Distance-derived state the heavy update reacts to, computed from
+        /// the camera distance the culling pass already keeps current (the
+        /// scaffold's own distance check lives inside the heavy update, so it
+        /// cannot be used to decide whether to run it).
+        /// </summary>
+        private int GetHeavyUpdateSignature(
+            ConstructionVisual visual
+        )
+        {
+            float distance =
+                visual.CameraDistance;
+
+            int cutoffBand =
+                GetCutoffDistanceBand(
+                    distance
+                );
+
+            int scaffoldLod =
+                distance >=
+                ScaffoldFarLodDistance
+                    ? 3
+                    : distance >=
+                      ScaffoldMediumLodDistance
+                        ? 2
+                        : 1;
+
+            int shadowRange =
+                distance <=
+                ScaffoldShadowCullDistance
+                    ? 1
+                    : 0;
+
+            int scaffoldInRange =
+                distance <=
+                GetAdaptiveScaffoldCullDistance(
+                    visual
+                )
+                    ? 1
+                    : 0;
+
+            return
+                cutoffBand |
+                (scaffoldLod << 2) |
+                (shadowRange << 4) |
+                (scaffoldInRange << 5);
+        }
+
+        /// <summary>
+        /// True when UpdateCutoffBuildingVisual would rebuild any cut mesh
+        /// for the current visual progress. It reads the same decision
+        /// (GetCutoffTargets), so the two cannot drift apart. With no cut
+        /// meshes there is no cut step to wait for, so it reports true and
+        /// the 10 Hz ceiling rules.
+        /// </summary>
+        private bool CutoffRebuildDue(
+            ConstructionVisual visual
+        )
+        {
+            if (
+                visual.CutoffMeshes == null ||
+                visual.CutoffMeshes.Count == 0
+            )
+            {
+                return true;
+            }
+
+            CutoffTargets targets =
+                GetCutoffTargets(
+                    visual,
+                    visual.VisualProgress
+                );
+
+            return
+                targets.RebuildShell ||
+                targets.RebuildWindows;
         }
 
         private void UpdateConstructionVisual(

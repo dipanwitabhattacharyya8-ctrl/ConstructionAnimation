@@ -38,6 +38,11 @@ namespace ConstructionAnimation
             Instance == null ||
             Instance.RecutPerFloor;
 
+        /// <summary>True (default) while the option is on or the options are not loaded yet. Only has an effect together with the near-site throttle.</summary>
+        public static bool ChangeDrivenUpdatesEnabled =>
+            Instance == null ||
+            Instance.SkipUnchangedSites;
+
         public Setting(IMod mod) : base(mod)
         {
         }
@@ -50,6 +55,9 @@ namespace ConstructionAnimation
 
         [SettingsUISection(kSection, kPerformanceGroup)]
         public bool RecutPerFloor { get; set; } = true;
+
+        [SettingsUISection(kSection, kPerformanceGroup)]
+        public bool SkipUnchangedSites { get; set; } = true;
 
         [SettingsUISection(kSection, kDiagnosticsGroup)]
         public ModLogLevel LogLevel
@@ -67,6 +75,7 @@ namespace ConstructionAnimation
             OptimizeCompanyLookup = true;
             ThrottleNearSites = true;
             RecutPerFloor = true;
+            SkipUnchangedSites = true;
             LogLevel = ModLogLevel.Off;
         }
     }
@@ -98,6 +107,9 @@ namespace ConstructionAnimation
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.RecutPerFloor)), "Re-cut building once per floor" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.RecutPerFloor)), "On: the rising building is re-cut (its mesh rebuilt) only when it reaches the next floor, so it rises floor by floor, with cuts on the building's own floor lines (floors closer than 2 m are merged, gaps over 5 m are split, every 3 m if floors were not detected). Off: the previous behavior, re-cut every 0.3-2.5 m depending on camera distance." },
+
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.SkipUnchangedSites)), "Skip unchanged sites" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.SkipUnchangedSites)), "Works together with 'Throttle nearby sites'. On: at each 10 Hz tick a nearby site runs its heavy update only if its cut step (the building would be re-cut), visibility or LOD changed, plus a safety refresh every second. Off: the previous behavior, every nearby site updates at the throttle rate regardless. Scaffold levels and the crane therefore advance with the cut steps or the one-second refresh." },
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.LogLevel)), "Log level" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.LogLevel)), "Off (default): no diagnostic log file; errors and the load/unload lines still go to the game log. PERF lines only: writes only the [PERF] report (every 10 s) and errors to Logs/ConstructionAnimation-diagnostic.log. Full: the previous, very verbose logging." },
