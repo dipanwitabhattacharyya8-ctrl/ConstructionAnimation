@@ -165,6 +165,23 @@ namespace ConstructionAnimation.Systems
         // the profiler does not become the performance problem it measures.
         private const float PerformanceReportInterval = 10f;
 
+        // "Cheaper company banner lookup" option: seconds between each
+        // waiting site's look at its own Renter buffer (previously 1 s), and
+        // between the shared city-wide reverse scans that serve all waiting
+        // sites at once (previously one scan per waiting site per second).
+        private const float CompanyLookupRetryInterval = 5f;
+        private const float CompanyReverseLookupInterval = 30f;
+
+        private float m_NextCompanyReverseLookupTime;
+
+        // Building -> company renter found by the last shared reverse scan,
+        // and the scratch set of buildings that scan looked for.
+        private readonly Dictionary<Entity, Entity> m_CompanyReverseMatches =
+            new Dictionary<Entity, Entity>();
+
+        private readonly HashSet<Entity> m_CompanyWaitingBuildings =
+            new HashSet<Entity>();
+
         private float m_NextPerformanceReportTime;
 
         private long m_PerfOnUpdateTicks;
@@ -5507,6 +5524,8 @@ namespace ConstructionAnimation.Systems
                     buildings.Length
                 );
 
+                RunSharedCompanyReverseLookupIfDue();
+
                 for (
                     int i = 0;
                     i < buildings.Length;
@@ -6677,6 +6696,24 @@ namespace ConstructionAnimation.Systems
 
             }
 
+            // "Cheaper company banner lookup": the city-wide scan below
+            // allocates every PropertyRenter in the city (households
+            // included) for each waiting site on every retry. With the option
+            // on, a single shared scan (RunSharedCompanyReverseLookupIfDue)
+            // serves all waiting sites every CompanyReverseLookupInterval
+            // seconds instead, and this only picks up its result.
+            if (
+                Setting.CompanyLookupOwnRentersOnly
+            )
+            {
+                return TryTakeSharedCompanyReverseMatch(
+                    building,
+                    out companyEntity,
+                    out companyPrefab,
+                    out companyName
+                );
+            }
+
             using NativeArray<Entity> renterEntities =
                 m_CompanyRenterQuery.ToEntityArray(
                     Allocator.Temp
@@ -6776,6 +6813,268 @@ namespace ConstructionAnimation.Systems
             return false;
         }
 
+        /// <summary>
+        /// "Cheaper company banner lookup": one city-wide PropertyRenter scan,
+        /// at most every CompanyReverseLookupInterval seconds and only while
+        /// at least one site is still waiting for its company, shared by all
+        /// waiting sites. Matches are handed out by
+        /// TryTakeSharedCompanyReverseMatch.
+        /// </summary>
+        private void RunSharedCompanyReverseLookupIfDue()
+        {
+            if (
+                !Setting.CompanyLookupOwnRentersOnly
+            )
+            {
+                m_CompanyReverseMatches.Clear();
+
+                return;
+            }
+
+            float now =
+                UnityEngine.Time.unscaledTime;
+
+            if (
+                now <
+                m_NextCompanyReverseLookupTime
+            )
+            {
+                return;
+            }
+
+            m_CompanyWaitingBuildings.Clear();
+
+            foreach (
+                ConstructionVisual visual
+                in m_Visuals.Values
+            )
+            {
+                if (
+                    visual != null &&
+                    visual.BrandingEligible &&
+                    visual.CompanyBannerRoot == null &&
+                    visual.Source != Entity.Null
+                )
+                {
+                    m_CompanyWaitingBuildings.Add(
+                        visual.Source
+                    );
+                }
+            }
+
+            if (
+                m_CompanyWaitingBuildings.Count == 0
+            )
+            {
+                // Nobody is waiting: look again in a second rather than
+                // walking the visuals every frame.
+                m_NextCompanyReverseLookupTime =
+                    now +
+                    1f;
+
+                return;
+            }
+
+            m_NextCompanyReverseLookupTime =
+                now +
+                CompanyReverseLookupInterval;
+
+            m_CompanyReverseMatches.Clear();
+
+            using NativeArray<Entity> renterEntities =
+                m_CompanyRenterQuery.ToEntityArray(
+                    Allocator.Temp
+                );
+
+            for (
+                int i = 0;
+                i < renterEntities.Length;
+                i++
+            )
+            {
+                Entity renter =
+                    renterEntities[i];
+
+                if (
+                    renter == Entity.Null ||
+                    !EntityManager.Exists(
+                        renter
+                    )
+                )
+                {
+                    continue;
+                }
+
+                Entity property =
+                    EntityManager.GetComponentData<PropertyRenter>(
+                        renter
+                    ).m_Property;
+
+                if (
+                    !m_CompanyWaitingBuildings.Contains(
+                        property
+                    ) ||
+                    m_CompanyReverseMatches.ContainsKey(
+                        property
+                    )
+                )
+                {
+                    continue;
+                }
+
+                Entity prefab =
+                    EntityManager.GetComponentData<PrefabRef>(
+                        renter
+                    ).m_Prefab;
+
+                if (
+                    prefab == Entity.Null ||
+                    !EntityManager.Exists(
+                        prefab
+                    ) ||
+                    !EntityManager.HasComponent<CompanyData>(
+                        prefab
+                    )
+                )
+                {
+                    continue;
+                }
+
+                m_CompanyReverseMatches[property] =
+                    renter;
+            }
+
+            // Sites with a match create their banner on their next update
+            // instead of waiting for their own retry time.
+            foreach (
+                ConstructionVisual visual
+                in m_Visuals.Values
+            )
+            {
+                if (
+                    visual != null &&
+                    visual.CompanyBannerRoot == null &&
+                    m_CompanyReverseMatches.ContainsKey(
+                        visual.Source
+                    )
+                )
+                {
+                    visual.NextBrandingRetryTime =
+                        0f;
+                }
+            }
+        }
+
+        private bool TryTakeSharedCompanyReverseMatch(
+            Entity building,
+            out Entity companyEntity,
+            out Entity companyPrefab,
+            out string companyName
+        )
+        {
+            companyEntity =
+                Entity.Null;
+
+            companyPrefab =
+                Entity.Null;
+
+            companyName =
+                null;
+
+            Entity renter;
+
+            if (
+                !m_CompanyReverseMatches.TryGetValue(
+                    building,
+                    out renter
+                )
+            )
+            {
+                return false;
+            }
+
+            m_CompanyReverseMatches.Remove(
+                building
+            );
+
+            // The match can be up to CompanyReverseLookupInterval seconds
+            // old: check the company still exists and still rents here.
+            if (
+                renter == Entity.Null ||
+                !EntityManager.Exists(
+                    renter
+                ) ||
+                !EntityManager.HasComponent<PropertyRenter>(
+                    renter
+                ) ||
+                EntityManager.GetComponentData<PropertyRenter>(
+                    renter
+                ).m_Property !=
+                building ||
+                !EntityManager.HasComponent<PrefabRef>(
+                    renter
+                )
+            )
+            {
+                return false;
+            }
+
+            Entity prefab =
+                EntityManager.GetComponentData<PrefabRef>(
+                    renter
+                ).m_Prefab;
+
+            if (
+                prefab == Entity.Null ||
+                !EntityManager.Exists(
+                    prefab
+                ) ||
+                !EntityManager.HasComponent<CompanyData>(
+                    prefab
+                )
+            )
+            {
+                return false;
+            }
+
+            string prefabName =
+                null;
+
+            try
+            {
+                prefabName =
+                    m_PrefabSystem.GetPrefabName(
+                        prefab
+                    );
+            }
+            catch
+            {
+            }
+
+            companyEntity =
+                renter;
+
+            companyPrefab =
+                prefab;
+
+            companyName =
+                string.IsNullOrWhiteSpace(
+                    prefabName
+                )
+                    ? "Company"
+                    : prefabName;
+
+            ModLog.Info(
+                $"V1.42.5 COMPANY FOUND REVERSE (shared) " +
+                $"building={building.Index}:{building.Version} " +
+                $"company={companyEntity.Index}:{companyEntity.Version} " +
+                $"prefab={companyPrefab.Index}:{companyPrefab.Version} " +
+                $"name={companyName}"
+            );
+
+            return true;
+        }
+
         private void CreateCompanyBanner(
             ConstructionVisual visual
         )
@@ -6803,7 +7102,11 @@ namespace ConstructionAnimation.Systems
             {
                 visual.NextBrandingRetryTime =
                     UnityEngine.Time.unscaledTime +
-                    1f;
+                    (
+                        Setting.CompanyLookupOwnRentersOnly
+                            ? CompanyLookupRetryInterval
+                            : 1f
+                    );
 
                 return;
             }

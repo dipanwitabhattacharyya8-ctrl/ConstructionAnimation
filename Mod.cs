@@ -1,13 +1,24 @@
+using Colossal.IO.AssetDatabase;
 using Game;
 using Game.Modding;
+using Game.SceneFlow;
 using ConstructionAnimation.Systems;
 
 namespace ConstructionAnimation
 {
     public sealed class Mod : IMod
     {
+        private Setting m_Setting;
+
         public void OnLoad(UpdateSystem updateSystem)
         {
+            // Options first, so everything below already sees the saved choices.
+            m_Setting = new Setting(this);
+            Setting.Instance = m_Setting;
+            m_Setting.RegisterInOptionsUI();
+            GameManager.instance.localizationManager.AddSource("en-US", new LocaleEN(m_Setting));
+            AssetDatabase.global.LoadSettings("ConstructionAnimation", m_Setting, new Setting(this));
+
             ModLog.Initialize();
 
             ModLog.Info(
@@ -42,6 +53,13 @@ namespace ConstructionAnimation
             );
 
             ModLog.Shutdown();
+
+            if (m_Setting != null)
+            {
+                m_Setting.UnregisterInOptionsUI();
+                m_Setting = null;
+                Setting.Instance = null;
+            }
         }
     }
 }
