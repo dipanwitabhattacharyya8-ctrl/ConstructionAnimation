@@ -16,13 +16,14 @@ What changed, in short:
 
 - **Logging:** a "Log level" option (Off / PERF lines only / Full). Log strings on per-frame paths are only built at Full.
 - **Nearby sites:** sites within 650 m run the heavy update (cut, scaffold, crane) about 10 times a second instead of every frame, and skip it when nothing has changed.
-- **Re-cut per floor:** the rising building is re-cut once per floor height instead of every 0.3 to 2.5 m.
-- **Company banner:** the lookup uses only the building's own renter list and retries every 5 s, with no more city-wide scan.
-- **Site query:** it skips Temp, Deleted and Destroyed buildings, like the game's own construction system does.
+- **Re-cut per floor:** the rising building is re-cut only when it reaches the next floor, with the cut on the building's floor lines, instead of every 0.3 to 2.5 m.
+- **Company banner:** each site checks its building's own renter list every 5 s. The city-wide renter scan still runs, but as one shared pass every 30 s for all waiting sites instead of one per site every second.
 
-Each change has its own toggle in Options, so you can compare it with the current behaviour. A couple of them change how construction looks: the building rises in floor-sized steps, and the scaffold updates less often. I'm happy to make those off by default, or to drop anything you'd rather not have.
+Each change has its own toggle in Options, so you can compare it with the current behaviour. A couple of them change how construction looks: the building rises floor by floor, and the scaffold updates less often. Which defaults to use, and how many of the toggles to keep, are entirely up to you.
 
 Would you be open to a pull request? I can also split it into smaller PRs or adjust anything to fit how you like to work. The branch is here: https://github.com/dipanwitabhattacharyya8-ctrl/ConstructionAnimation/tree/performance-fixes
+
+I also have a small, separate fix (the site search skips tool previews and destroyed buildings, like the game's own construction system does) that I can send as its own PR later if you're interested.
 
 Thanks either way!
 
@@ -45,24 +46,20 @@ Busy city, 3x speed, about 52 active construction sites:
 
 ### What's in it (one commit each)
 
-1. **Company banner lookup:** uses only the building's own `Renter` buffer and retries every 5 s instead of 1 s. The city-wide `PropertyRenter` scan, which includes households, only runs with the option off.
-2. **Log level option:** Off (default) / PERF lines only / Full. Off never opens the diagnostic file. Errors still go to the game log.
+1. **Company banner lookup:** each waiting site checks its building's own `Renter` buffer every 5 s instead of 1 s. The city-wide `PropertyRenter` reverse scan, which includes households, now runs as one shared pass at most every 30 s, and only while a site is waiting, instead of once per waiting site every second. Matches are re-checked before use.
+2. **Log level option:** Off / PERF lines only / Full. Off never opens the diagnostic file and skips building the `[PERF]` report. Errors and the mod loaded/disposed lines still go to the game log at every level.
 3. **Nearby-site throttle:** sites within 650 m run the heavy visual update (proxy, cut, scaffold, crane) about every 0.1 s instead of every frame. Progress is still smoothed every frame.
-4. **Re-cut once per floor:** the cut-mesh rebuild threshold becomes the building's floor height (BuildingHeight / detected floors, clamped to 2–5 m), never finer than the current adaptive value.
-5. **Skip unchanged sites:** at each 0.1 s tick a nearby site updates only if its cut is due, its distance band, LOD, shadow range or cull range changed, or a 1 s safety refresh is due.
+4. **Re-cut once per floor:** the structure and facade cuts snap to the building's floor levels from `FloorBoundaries`. Levels closer than 2 m are merged, gaps over 5 m are split, and buildings without detected floors use a level every 3 m. The meshes are rebuilt only when a cut reaches the next level, and a window-reveal step rebuilds just the window meshes. The cut heights and the rebuild decision now live in one place (`GetCutoffTargets`).
+5. **Skip unchanged sites:** at each 0.1 s tick a nearby site updates only if its cut is due (the same `GetCutoffTargets` decision), its distance band, LOD, shadow range or cull range changed, it was hidden or beyond 650 m since its last near update, or a 1 s safety refresh is due.
 6. **Cheaper logging calls:** per-frame log strings (progress, heartbeat, cut update, crane POI, facade colour) are only built at Full. This doesn't change behaviour, so it has no toggle.
-7. **Site query:** excludes `Temp`, `Deleted` and `Destroyed`, matching the game's `BuildingConstructionSystem` query.
 
 ### Options (Options > Mods > Construction Animation)
 
-All performance toggles default to **on**, and switching one off restores the current behaviour. The `[PERF]` report now has a `TOGGLES` line, so every report says which options were active.
+Each change except 6 has its own toggle, and switching one off restores the previous behaviour. The `[PERF]` report has a `TOGGLES` line, so every report says which options were active. I've left the defaults (all toggles on, log level Off) and the number of toggles for you to decide; they were mainly useful for A/B testing.
 
 ### Behaviour changes worth knowing
 
-- The building rises in floor-sized steps instead of near-continuously. The scaffold and crane advance with those steps, plus a refresh every second.
-- The diagnostic log file is no longer written by default. Set "Log level" to Full to get the old logs for bug reports.
-- Tool previews and destroyed or deleted buildings no longer get a construction visual.
-
-If you'd rather have the visual changes off by default, or would like this split into smaller PRs, just say and I'll change it.
+- With "Re-cut once per floor" on, the building rises floor by floor instead of near-continuously. The scaffold and crane advance with those steps, plus a refresh every second.
+- With log level Off, the diagnostic log file isn't written. Set "Log level" to Full to get the old logs for bug reports.
 
 Thanks again for the mod!
