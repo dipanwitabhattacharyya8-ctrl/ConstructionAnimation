@@ -21,8 +21,9 @@ namespace ConstructionAnimation
 
             ModLog.Initialize();
 
-            ModLog.Info(
-                "Construction Animation v0.1 loaded."
+            ModLog.Notice(
+                "Construction Animation v0.1 loaded; log level=" +
+                ModLog.Level
             );
 
             ModLog.Checkpoint(
@@ -48,7 +49,7 @@ namespace ConstructionAnimation
                 "MOD OnDispose begin"
             );
 
-            ModLog.Info(
+            ModLog.Notice(
                 "Construction Animation disposed."
             );
 

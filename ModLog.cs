@@ -6,6 +6,14 @@ using UnityEngine;
 
 namespace ConstructionAnimation
 {
+    /// <summary>How much ModLog writes (Options > Diagnostics).</summary>
+    public enum ModLogLevel
+    {
+        Off = 0,
+        PerfOnly = 1,
+        Full = 2
+    }
+
     internal static class ModLog
     {
         private static readonly ILog s_Log =
@@ -23,8 +31,36 @@ namespace ConstructionAnimation
         public static string DiagnosticPath =>
             s_DiagnosticPath;
 
+        /// <summary>Off until the options are loaded.</summary>
+        internal static ModLogLevel Level =>
+            Setting.Instance != null
+                ? Setting.Instance.LogLevel
+                : ModLogLevel.Off;
+
+        /// <summary>
+        /// Called when the option changes. Off closes the diagnostic file;
+        /// it is reopened lazily by the next write when the level is raised.
+        /// </summary>
+        internal static void OnLevelChanged()
+        {
+            if (
+                Level == ModLogLevel.Off
+            )
+            {
+                Shutdown();
+            }
+        }
+
         public static void Initialize()
         {
+            // Off: do not even create or open the diagnostic file.
+            if (
+                Level == ModLogLevel.Off
+            )
+            {
+                return;
+            }
+
             lock (s_FileLock)
             {
                 if (s_Initialized)
@@ -133,6 +169,29 @@ namespace ConstructionAnimation
             string message
         )
         {
+            if (
+                Level != ModLogLevel.Full
+            )
+            {
+                return;
+            }
+
+            TryWrite(
+                () => s_Log.Info(
+                    message
+                )
+            );
+        }
+
+        /// <summary>
+        /// Game log only, at every level: for the few one-time lines (mod
+        /// loaded/unloaded) that show the mod is running even when logging
+        /// is Off.
+        /// </summary>
+        public static void Notice(
+            string message
+        )
+        {
             TryWrite(
                 () => s_Log.Info(
                     message
@@ -181,6 +240,29 @@ namespace ConstructionAnimation
             string message
         )
         {
+            ModLogLevel level =
+                Level;
+
+            // Off: nothing, and no lock or file I/O. PerfOnly: only the
+            // [PERF] report lines and errors. Full: everything, as before.
+            if (
+                level == ModLogLevel.Off ||
+                (
+                    level == ModLogLevel.PerfOnly &&
+                    category != "ERROR" &&
+                    (
+                        message == null ||
+                        !message.StartsWith(
+                            "[PERF]",
+                            StringComparison.Ordinal
+                        )
+                    )
+                )
+            )
+            {
+                return;
+            }
+
             lock (s_FileLock)
             {
                 if (!s_Initialized)

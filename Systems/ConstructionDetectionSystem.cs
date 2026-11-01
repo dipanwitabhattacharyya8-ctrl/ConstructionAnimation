@@ -4925,6 +4925,18 @@ namespace ConstructionAnimation.Systems
                 now +
                 PerformanceReportInterval;
 
+            // Log level Off drops the [PERF] line anyway: skip the scan of
+            // all visuals and the report string, just start a new interval.
+            if (
+                ModLog.Level ==
+                ModLogLevel.Off
+            )
+            {
+                ResetPerformanceCounters();
+
+                return;
+            }
+
             int activeSites =
                 m_Visuals.Count;
 
@@ -5403,6 +5415,11 @@ namespace ConstructionAnimation.Systems
                 activeCranes
             );
 
+            ResetPerformanceCounters();
+        }
+
+        private void ResetPerformanceCounters()
+        {
             m_PerfOnUpdateTicks = 0;
             m_PerfOnUpdateMaxTicks = 0;
             m_PerfOnUpdateCalls = 0;
