@@ -267,6 +267,7 @@ namespace ConstructionAnimation.Systems
         private long m_PerfCullingScaffoldUpdatesSkipped;
         private long m_PerfCullingCraneUpdatesSkipped;
         private long m_PerfCullingFarThrottledUpdates;
+        private long m_PerfCullingNearThrottledUpdates;
 
 
         private readonly HashSet<int> m_LoggedBuildingRenderPrefabs =
@@ -1161,6 +1162,12 @@ namespace ConstructionAnimation.Systems
 
         private const float VisualVeryFarDistance =
             1500f;
+
+        // Seconds between heavy visual updates for sites within
+        // ScaffoldShadowCullDistance when "throttle nearby sites" is on
+        // (previously every frame): ~10 Hz.
+        private const float NearVisualUpdateInterval =
+            0.10f;
 
         private const float ScaffoldShadowCullDistance =
             650f;
@@ -5231,6 +5238,18 @@ namespace ConstructionAnimation.Systems
                     "0"
                 ) +
                 "s" +
+                "\n  TOGGLES companyLookup=" +
+                (
+                    Setting.CompanyLookupOwnRentersOnly
+                        ? "on"
+                        : "off"
+                ) +
+                " nearThrottle=" +
+                (
+                    Setting.NearSiteThrottleEnabled
+                        ? "on"
+                        : "off"
+                ) +
                 "\n  TOTAL OnUpdate " +
                 PerfFormat(
                     m_PerfOnUpdateTicks,
@@ -5373,6 +5392,8 @@ namespace ConstructionAnimation.Systems
                 m_PerfCullingCraneUpdatesSkipped +
                 " farThrottled=" +
                 m_PerfCullingFarThrottledUpdates +
+                " nearThrottled=" +
+                m_PerfCullingNearThrottledUpdates +
                 " cameraDistance(min/avg/max)=" +
                 (
                     cameraDistanceSamples > 0
@@ -5492,6 +5513,7 @@ namespace ConstructionAnimation.Systems
             m_PerfCullingScaffoldUpdatesSkipped = 0;
             m_PerfCullingCraneUpdatesSkipped = 0;
             m_PerfCullingFarThrottledUpdates = 0;
+            m_PerfCullingNearThrottledUpdates = 0;
         }
 
         protected override void OnUpdate()
@@ -13175,6 +13197,41 @@ namespace ConstructionAnimation.Systems
                 ScaffoldShadowCullDistance
             )
             {
+                if (
+                    !Setting.NearSiteThrottleEnabled
+                )
+                {
+                    return true;
+                }
+
+                // ~10 Hz instead of every frame. The visual
+                // progress is still smoothed every frame in
+                // UpdateConstructionVisual, and the completion fade and
+                // dismantling use UpdateCompletedConstructionVisual, so this
+                // only samples that smooth value less often.
+                float nearNow =
+                    global::UnityEngine.Time.unscaledTime;
+
+                float nearRemaining =
+                    visual.NextHeavyVisualUpdateTime -
+                    nearNow;
+
+                // A leftover far-site delay longer than the near interval
+                // must not hold back a site that just came close.
+                if (
+                    nearRemaining > 0f &&
+                    nearRemaining <= NearVisualUpdateInterval
+                )
+                {
+                    m_PerfCullingNearThrottledUpdates++;
+
+                    return false;
+                }
+
+                visual.NextHeavyVisualUpdateTime =
+                    nearNow +
+                    NearVisualUpdateInterval;
+
                 return true;
             }
 

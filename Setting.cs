@@ -28,12 +28,20 @@ namespace ConstructionAnimation
             Instance == null ||
             Instance.OptimizeCompanyLookup;
 
+        /// <summary>True (default) while the option is on or the options are not loaded yet.</summary>
+        public static bool NearSiteThrottleEnabled =>
+            Instance == null ||
+            Instance.ThrottleNearSites;
+
         public Setting(IMod mod) : base(mod)
         {
         }
 
         [SettingsUISection(kSection, kPerformanceGroup)]
         public bool OptimizeCompanyLookup { get; set; } = true;
+
+        [SettingsUISection(kSection, kPerformanceGroup)]
+        public bool ThrottleNearSites { get; set; } = true;
 
         [SettingsUISection(kSection, kDiagnosticsGroup)]
         public ModLogLevel LogLevel
@@ -49,6 +57,7 @@ namespace ConstructionAnimation
         public override void SetDefaults()
         {
             OptimizeCompanyLookup = true;
+            ThrottleNearSites = true;
             LogLevel = ModLogLevel.Off;
         }
     }
@@ -74,6 +83,9 @@ namespace ConstructionAnimation
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.OptimizeCompanyLookup)), "Cheaper company banner lookup" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.OptimizeCompanyLookup)), "On: a construction site looks for its company in the building's own renter list every 5 seconds, and one shared scan of every renter in the city runs at most every 30 seconds for all sites still waiting. Off: the previous behavior, which scans every renter in the city (households included) for each waiting site every second." },
+
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.ThrottleNearSites)), "Throttle nearby sites (10 Hz)" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.ThrottleNearSites)), "On: construction sites within 650 m run their heavy visual update (building cut, scaffold, crane) about 10 times per second instead of every frame. Off: the previous every-frame update." },
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.LogLevel)), "Log level" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.LogLevel)), "Off (default): no diagnostic log file; errors and the load/unload lines still go to the game log. PERF lines only: writes only the [PERF] report (every 10 s) and errors to Logs/ConstructionAnimation-diagnostic.log. Full: the previous, very verbose logging." },
