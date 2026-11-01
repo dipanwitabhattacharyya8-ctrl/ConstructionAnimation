@@ -33,6 +33,11 @@ namespace ConstructionAnimation
             Instance == null ||
             Instance.ThrottleNearSites;
 
+        /// <summary>True (default) while the option is on or the options are not loaded yet.</summary>
+        public static bool RecutPerFloorEnabled =>
+            Instance == null ||
+            Instance.RecutPerFloor;
+
         public Setting(IMod mod) : base(mod)
         {
         }
@@ -42,6 +47,9 @@ namespace ConstructionAnimation
 
         [SettingsUISection(kSection, kPerformanceGroup)]
         public bool ThrottleNearSites { get; set; } = true;
+
+        [SettingsUISection(kSection, kPerformanceGroup)]
+        public bool RecutPerFloor { get; set; } = true;
 
         [SettingsUISection(kSection, kDiagnosticsGroup)]
         public ModLogLevel LogLevel
@@ -58,6 +66,7 @@ namespace ConstructionAnimation
         {
             OptimizeCompanyLookup = true;
             ThrottleNearSites = true;
+            RecutPerFloor = true;
             LogLevel = ModLogLevel.Off;
         }
     }
@@ -86,6 +95,9 @@ namespace ConstructionAnimation
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.ThrottleNearSites)), "Throttle nearby sites (10 Hz)" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.ThrottleNearSites)), "On: construction sites within 650 m run their heavy visual update (building cut, scaffold, crane) about 10 times per second instead of every frame. Off: the previous every-frame update." },
+
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.RecutPerFloor)), "Re-cut building once per floor" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.RecutPerFloor)), "On: the rising building is re-cut (its mesh rebuilt) only when it reaches the next floor, so it rises floor by floor, with cuts on the building's own floor lines (floors closer than 2 m are merged, gaps over 5 m are split, every 3 m if floors were not detected). Off: the previous behavior, re-cut every 0.3-2.5 m depending on camera distance." },
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.LogLevel)), "Log level" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.LogLevel)), "Off (default): no diagnostic log file; errors and the load/unload lines still go to the game log. PERF lines only: writes only the [PERF] report (every 10 s) and errors to Logs/ConstructionAnimation-diagnostic.log. Full: the previous, very verbose logging." },

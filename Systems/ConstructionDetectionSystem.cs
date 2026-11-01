@@ -24,6 +24,14 @@ namespace ConstructionAnimation.Systems
         private const float CutoffHeightUpdateMaximumThreshold = 0.60f;
         private const float CutoffTargetVerticalSteps = 240f;
 
+        // "Re-cut once per floor" option: the cut snaps to the building's
+        // floor boundaries. Boundaries closer than the minimum are merged,
+        // gaps above the maximum are split, and buildings without detected
+        // floors use the fallback spacing (all in metres).
+        private const float CutoffFloorFallbackHeight = 3f;
+        private const float CutoffFloorMinimumHeight = 2f;
+        private const float CutoffFloorMaximumHeight = 5f;
+
         private const float FacadeContinuousStartProgress = 0.12f;
         private const float FacadeCatchupStartProgress = 0.80f;
         private const float FacadeCompletionProgress = 0.99f;
@@ -718,6 +726,14 @@ namespace ConstructionAnimation.Systems
             public float NextVisualCullingCheckTime;
 
             public float NextHeavyVisualUpdateTime;
+
+            // "Re-cut once per floor" option: cut levels (0..1 of the
+            // building height) built from FloorBoundaries, and what they were
+            // built from, so they are rebuilt if the floors change.
+            public List<float> CutoffFloorLevels;
+            public List<float> CutoffFloorLevelsSource;
+            public int CutoffFloorLevelsSourceCount;
+            public float CutoffFloorLevelsHeight;
 
             public Entity CompanyEntity =
                 Entity.Null;
@@ -5247,6 +5263,12 @@ namespace ConstructionAnimation.Systems
                 " nearThrottle=" +
                 (
                     Setting.NearSiteThrottleEnabled
+                        ? "on"
+                        : "off"
+                ) +
+                " recutPerFloor=" +
+                (
+                    Setting.RecutPerFloorEnabled
                         ? "on"
                         : "off"
                 ) +
@@ -12816,6 +12838,407 @@ namespace ConstructionAnimation.Systems
                     maxThreshold,
                     normalizedBase
                 );
+        }
+
+        /// <summary>
+        /// Cut heights for one visual progress, and which cut meshes must be
+        /// rebuilt for them.
+        /// </summary>
+        private struct CutoffTargets
+        {
+            public float CutHeight;
+            public float FacadeProgress;
+            public float FacadeCutHeight;
+            public float WindowCutHeight;
+            public int CompletedWindowFloorCount;
+            public int WindowFloorCount;
+            public bool Endpoint;
+
+            // Facade and structure meshes (the structure's lower edge
+            // follows the facade cut, so they are rebuilt together).
+            public bool RebuildShell;
+
+            public bool RebuildWindows;
+        }
+
+        /// <summary>
+        /// The one place that decides the cut heights for a progress and
+        /// whether the cut meshes need rebuilding. UpdateCutoffBuildingVisual
+        /// applies the result; nothing else may duplicate this test.
+        /// </summary>
+        private CutoffTargets GetCutoffTargets(
+            ConstructionVisual visual,
+            float progress
+        )
+        {
+            CutoffTargets targets =
+                default(CutoffTargets);
+
+            progress =
+                Mathf.Clamp01(
+                    progress
+                );
+
+            bool perFloor =
+                Setting.RecutPerFloorEnabled;
+
+            targets.CutHeight =
+                Mathf.Lerp(
+                    visual.CutoffLocalMinY,
+                    visual.CutoffLocalMaxY,
+                    perFloor
+                        ? SnapToCutoffFloorLevel(
+                            visual,
+                            progress
+                        )
+                        : progress
+                );
+
+            targets.FacadeProgress =
+                GetContinuousFacadeProgress(
+                    progress
+                );
+
+            targets.FacadeCutHeight =
+                Mathf.Lerp(
+                    visual.CutoffLocalMinY,
+                    visual.CutoffLocalMaxY,
+                    perFloor &&
+                    targets.FacadeProgress > 0f
+                        ? SnapToCutoffFloorLevel(
+                            visual,
+                            targets.FacadeProgress
+                        )
+                        : targets.FacadeProgress
+                );
+
+            targets.WindowCutHeight =
+                GetSteppedWindowRevealHeight(
+                    visual,
+                    progress,
+                    out targets.CompletedWindowFloorCount,
+                    out targets.WindowFloorCount
+                );
+
+            targets.Endpoint =
+                progress <= 0.001f ||
+                progress >= 0.999f;
+
+            float heightDelta =
+                Mathf.Abs(
+                    targets.CutHeight -
+                    visual.LastCutoffHeight
+                );
+
+            bool firstOrForced =
+                visual.ForceCutoffResync ||
+                !visual.HasCutoffHeight;
+
+            if (
+                !perFloor
+            )
+            {
+                bool mustUpdate =
+                    firstOrForced ||
+                    heightDelta >=
+                        GetAdaptiveCutoffRebuildHeightThreshold(
+                            visual
+                        ) ||
+                    (
+                        targets.Endpoint &&
+                        heightDelta > 0.001f
+                    );
+
+                targets.RebuildShell =
+                    mustUpdate;
+
+                targets.RebuildWindows =
+                    mustUpdate;
+
+                return targets;
+            }
+
+            // Per floor: the snapped structure and facade heights only change
+            // when they reach the next floor level, and the window reveal
+            // steps per floor on its own, so any change means a rebuild. A
+            // window-only step rebuilds just the window meshes.
+            targets.RebuildShell =
+                firstOrForced ||
+                heightDelta > 0.001f ||
+                Mathf.Abs(
+                    targets.FacadeCutHeight -
+                    visual.FacadeRevealHeight
+                ) > 0.001f;
+
+            targets.RebuildWindows =
+                targets.RebuildShell ||
+                (
+                    visual.WindowCutoffMeshes != null &&
+                    visual.WindowCutoffMeshes.Count > 0 &&
+                    Mathf.Abs(
+                        targets.WindowCutHeight -
+                        visual.WindowRevealHeight
+                    ) > 0.001f
+                );
+
+            return targets;
+        }
+
+        /// <summary>
+        /// "Re-cut once per floor": the highest floor level (0..1 of the
+        /// building height) at or below the given progress, so the cut lands
+        /// on floor boundaries. The top (1) is only reached at the end.
+        /// </summary>
+        private float SnapToCutoffFloorLevel(
+            ConstructionVisual visual,
+            float progress
+        )
+        {
+            if (
+                progress >= 0.999f
+            )
+            {
+                return 1f;
+            }
+
+            List<float> levels =
+                GetCutoffFloorLevels(
+                    visual
+                );
+
+            // levels[0] is 0 and the list is sorted bottom-to-top.
+            int low =
+                0;
+
+            int high =
+                levels.Count - 1;
+
+            int found =
+                0;
+
+            while (
+                low <= high
+            )
+            {
+                int mid =
+                    (low + high) >> 1;
+
+                if (
+                    levels[mid] <=
+                    progress +
+                    0.0001f
+                )
+                {
+                    found =
+                        mid;
+
+                    low =
+                        mid +
+                        1;
+                }
+                else
+                {
+                    high =
+                        mid -
+                        1;
+                }
+            }
+
+            return
+                levels[found];
+        }
+
+        /// <summary>
+        /// Cut levels for "re-cut once per floor", cached on the visual: the
+        /// building's FloorBoundaries as 0..1 of its height, merged where
+        /// closer than CutoffFloorMinimumHeight and split where further apart
+        /// than CutoffFloorMaximumHeight, or every CutoffFloorFallbackHeight
+        /// when no floors were detected.
+        /// </summary>
+        private static List<float> GetCutoffFloorLevels(
+            ConstructionVisual visual
+        )
+        {
+            List<float> source =
+                visual.FloorBoundaries;
+
+            int sourceCount =
+                source != null
+                    ? source.Count
+                    : 0;
+
+            float height =
+                visual.BuildingHeight;
+
+            if (
+                visual.CutoffFloorLevels != null &&
+                ReferenceEquals(
+                    visual.CutoffFloorLevelsSource,
+                    source
+                ) &&
+                visual.CutoffFloorLevelsSourceCount ==
+                    sourceCount &&
+                visual.CutoffFloorLevelsHeight ==
+                    height
+            )
+            {
+                return visual.CutoffFloorLevels;
+            }
+
+            List<float> levels =
+                visual.CutoffFloorLevels ??
+                new List<float>();
+
+            levels.Clear();
+
+            levels.Add(
+                0f
+            );
+
+            if (
+                height >
+                CutoffFloorMinimumHeight
+            )
+            {
+                if (
+                    sourceCount >= 2
+                )
+                {
+                    // FloorBoundaries: metres above the base, bottom-to-top.
+                    for (
+                        int i = 0;
+                        i < sourceCount;
+                        i++
+                    )
+                    {
+                        float level =
+                            source[i] /
+                            height;
+
+                        if (
+                            level > 0f &&
+                            level < 1f
+                        )
+                        {
+                            AddCutoffFloorLevel(
+                                levels,
+                                level,
+                                height
+                            );
+                        }
+                    }
+                }
+                else
+                {
+                    for (
+                        float levelHeight = CutoffFloorFallbackHeight;
+                        levelHeight < height;
+                        levelHeight += CutoffFloorFallbackHeight
+                    )
+                    {
+                        AddCutoffFloorLevel(
+                            levels,
+                            levelHeight /
+                            height,
+                            height
+                        );
+                    }
+                }
+
+                // An over-tall top floor is split too; the top itself is
+                // reached at the end of construction (SnapToCutoffFloorLevel).
+                SplitCutoffFloorGap(
+                    levels,
+                    1f,
+                    height
+                );
+            }
+
+            visual.CutoffFloorLevels =
+                levels;
+
+            visual.CutoffFloorLevelsSource =
+                source;
+
+            visual.CutoffFloorLevelsSourceCount =
+                sourceCount;
+
+            visual.CutoffFloorLevelsHeight =
+                height;
+
+            return levels;
+        }
+
+        private static void AddCutoffFloorLevel(
+            List<float> levels,
+            float level,
+            float height
+        )
+        {
+            float gap =
+                (
+                    level -
+                    levels[levels.Count - 1]
+                ) *
+                height;
+
+            // Too close to the previous level (or not above it): merge.
+            if (
+                gap <
+                CutoffFloorMinimumHeight
+            )
+            {
+                return;
+            }
+
+            SplitCutoffFloorGap(
+                levels,
+                level,
+                height
+            );
+
+            levels.Add(
+                level
+            );
+        }
+
+        /// <summary>Adds evenly spaced levels below <paramref name="level"/> so no gap exceeds CutoffFloorMaximumHeight.</summary>
+        private static void SplitCutoffFloorGap(
+            List<float> levels,
+            float level,
+            float height
+        )
+        {
+            float last =
+                levels[levels.Count - 1];
+
+            int parts =
+                Mathf.CeilToInt(
+                    (
+                        level -
+                        last
+                    ) *
+                    height /
+                    CutoffFloorMaximumHeight -
+                    0.0001f
+                );
+
+            for (
+                int k = 1;
+                k < parts;
+                k++
+            )
+            {
+                levels.Add(
+                    last +
+                    (
+                        level -
+                        last
+                    ) *
+                    k /
+                    parts
+                );
+            }
         }
 
         private float GetAdaptiveScaffoldCullDistance(
@@ -26649,63 +27072,17 @@ namespace ConstructionAnimation.Systems
                 return;
             }
 
-            float cutHeight =
-                Mathf.Lerp(
-                    visual.CutoffLocalMinY,
-                    visual.CutoffLocalMaxY,
-                    progress
-                );
-
-            float facadeProgress =
-                GetContinuousFacadeProgress(
-                    progress
-                );
-
-            float facadeCutHeight =
-                Mathf.Lerp(
-                    visual.CutoffLocalMinY,
-                    visual.CutoffLocalMaxY,
-                    facadeProgress
-                );
-
-            int completedWindowFloorCount;
-            int windowFloorCount;
-
-            float windowCutHeight =
-                GetSteppedWindowRevealHeight(
+            // Cut heights for this progress and which meshes need a rebuild
+            // (shared with the "skip unchanged sites" check).
+            CutoffTargets targets =
+                GetCutoffTargets(
                     visual,
-                    progress,
-                    out completedWindowFloorCount,
-                    out windowFloorCount
-                );
-
-            float heightDelta =
-                Mathf.Abs(
-                    cutHeight -
-                    visual.LastCutoffHeight
-                );
-
-            bool endpoint =
-                progress <= 0.001f ||
-                progress >= 0.999f;
-
-            float adaptiveCutoffThreshold =
-                GetAdaptiveCutoffRebuildHeightThreshold(
-                    visual
-                );
-
-            bool mustUpdate =
-                visual.ForceCutoffResync ||
-                !visual.HasCutoffHeight ||
-                heightDelta >=
-                    adaptiveCutoffThreshold ||
-                (
-                    endpoint &&
-                    heightDelta > 0.001f
+                    progress
                 );
 
             if (
-                !mustUpdate
+                !targets.RebuildShell &&
+                !targets.RebuildWindows
             )
             {
                 m_PerfCutoffRebuildsSkipped++;
@@ -26713,67 +27090,98 @@ namespace ConstructionAnimation.Systems
                 return;
             }
 
-            for (
-                int i = 0;
-                i < visual.FacadeCutoffMeshes.Count;
-                i++
+            float cutHeight =
+                targets.CutHeight;
+
+            float facadeProgress =
+                targets.FacadeProgress;
+
+            float facadeCutHeight =
+                targets.FacadeCutHeight;
+
+            float windowCutHeight =
+                targets.WindowCutHeight;
+
+            int completedWindowFloorCount =
+                targets.CompletedWindowFloorCount;
+
+            int windowFloorCount =
+                targets.WindowFloorCount;
+
+            bool endpoint =
+                targets.Endpoint;
+
+            if (
+                targets.RebuildShell
             )
             {
-                RebuildCutoffMesh(
-                    visual.FacadeCutoffMeshes[i],
-                    facadeProgress > 0f
-                        ? facadeCutHeight
-                        : visual.CutoffLocalMinY -
-                          0.001f
-                );
-            }
-
-            float structureMinHeight =
-                facadeProgress > 0f
-                    ? Mathf.Min(
-                        cutHeight +
-                        0.001f,
-                        facadeCutHeight +
-                        0.001f
-                    )
-                    : visual.CutoffLocalMinY +
-                      0.001f;
-
-            for (
-                int i = 0;
-                i < visual.CutoffMeshes.Count;
-                i++
-            )
-            {
-                if (
-                    DiagnosticCutoffGeometryOnly
+                for (
+                    int i = 0;
+                    i < visual.FacadeCutoffMeshes.Count;
+                    i++
                 )
                 {
                     RebuildCutoffMesh(
-                        visual.CutoffMeshes[i],
-                        cutHeight
+                        visual.FacadeCutoffMeshes[i],
+                        facadeProgress > 0f
+                            ? facadeCutHeight
+                            : visual.CutoffLocalMinY -
+                              0.001f
                     );
                 }
-                else
+
+                float structureMinHeight =
+                    facadeProgress > 0f
+                        ? Mathf.Min(
+                            cutHeight +
+                            0.001f,
+                            facadeCutHeight +
+                            0.001f
+                        )
+                        : visual.CutoffLocalMinY +
+                          0.001f;
+
+                for (
+                    int i = 0;
+                    i < visual.CutoffMeshes.Count;
+                    i++
+                )
                 {
-                    RebuildCutoffMesh(
-                        visual.CutoffMeshes[i],
-                        cutHeight,
-                        structureMinHeight
-                    );
+                    if (
+                        DiagnosticCutoffGeometryOnly
+                    )
+                    {
+                        RebuildCutoffMesh(
+                            visual.CutoffMeshes[i],
+                            cutHeight
+                        );
+                    }
+                    else
+                    {
+                        RebuildCutoffMesh(
+                            visual.CutoffMeshes[i],
+                            cutHeight,
+                            structureMinHeight
+                        );
+                    }
                 }
             }
 
-            for (
-                int i = 0;
-                i < visual.WindowCutoffMeshes.Count;
-                i++
+            if (
+                targets.RebuildWindows
             )
             {
-                RebuildCutoffMesh(
-                    visual.WindowCutoffMeshes[i],
-                    windowCutHeight
-                );
+                for (
+                    int i = 0;
+                    i < visual.WindowCutoffMeshes.Count;
+                    i++
+                )
+                {
+                    RebuildCutoffMesh(
+                        visual.WindowCutoffMeshes[i],
+                        windowCutHeight
+                    );
+                }
             }
 
             if (
