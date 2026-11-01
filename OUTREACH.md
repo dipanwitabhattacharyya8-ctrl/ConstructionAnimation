@@ -10,7 +10,7 @@ Drafts only; nothing here has been posted.
 
 Hi @Ti4goc, thanks for Construction Animation. Watching buildings actually rise is the best thing in my cities right now.
 
-In a busy city at 3x speed (about 52 active construction sites) my FPS dropped a lot, so I profiled the mod in a fork and made a few changes. In that test the mod's share of frame time fell from **30% to 8%**, and FPS rose from **about 25 to 44**.
+In a busy city at 3x speed (about 55 active construction sites) my FPS dropped a lot, so I profiled the mod in a fork and made a few changes. In a 2-minute A/B test with all options on versus all off, the mod's share of frame time fell from **49% to 21%**, and FPS rose from **about 16 to 27**.
 
 What changed, in short:
 
@@ -37,12 +37,13 @@ Hi! As discussed in the issue, here are the performance changes. Thanks for taki
 
 ### Result
 
-Busy city, 3x speed, about 52 active construction sites:
+Busy city, 3x speed, about 55 active construction sites, two 2-minute runs with the Log level on "PERF lines only" (all options on, then all off), averaged over the 10 s windows with 40 or more active sites:
 
 | | Before | After |
 |---|---|---|
-| Mod's share of frame time | 30% | 8% |
-| FPS | ~25 | ~44 |
+| Mod's share of frame time | 49% | 21% |
+| FPS | ~16 | ~27 |
+| Time spent re-cutting buildings (per 10 s) | 3.8 s | 1.6 s |
 
 ### What's in it (one commit each)
 
